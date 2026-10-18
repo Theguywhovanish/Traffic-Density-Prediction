@@ -7,13 +7,12 @@ The Kaggle dataset is organized as multiple travel-time CSVs for different locat
 ## What current codebase does
 
 1. Recursively discovers `*.csv` files under `data/raw/uber_movement/`.
-2. Ignores `Travel_Times.sample.csv` automatically when real downloaded CSVs are present.
-3. Attempts to normalize only files matching the Uber Movement travel-time schema.
-4. Records unrelated/auxiliary CSVs as `skipped_schema` instead of crashing the run.
-5. Adds `location` and `source_file` to every normalized record.
-6. Uses `(location, origin_id, destination_id)` when counting OD pairs, preventing Movement IDs from different cities from colliding.
-7. Validates positive travel times and the constraint `lower_tt <= mean_tt <= upper_tt`.
-8. Writes a compact normalized Parquet preview plus profiling reports.
+2. Attempts to normalize only files matching the Uber Movement travel-time schema.
+3. Records unrelated/auxiliary CSVs as `skipped_schema` instead of crashing the run.
+4. Adds `location` and `source_file` to every normalized record.
+5. Uses `(location, origin_id, destination_id)` when counting OD pairs, preventing Movement IDs from different cities from colliding.
+6. Validates positive travel times and the constraint `lower_tt <= mean_tt <= upper_tt`.
+7. Writes a compact normalized Parquet preview plus profiling reports.
 
 The dataset is treated as **aggregated origin-destination travel-time statistics**, not as billions of individual trip rows.
 
