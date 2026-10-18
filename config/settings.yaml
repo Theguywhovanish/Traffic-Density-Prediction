@@ -1,0 +1,33 @@
+historical_columns:
+  location:
+    - "Location"
+    - "location"
+    - "City"
+    - "city"
+  origin_id:
+    - "Origin Movement ID"
+    - "origin_movement_id"
+    - "origin_id"
+  destination_id:
+    - "Destination Movement ID"
+    - "destination_movement_id"
+    - "destination_id"
+  mean_tt:
+    - "Mean Travel Time (Seconds)"
+    - "mean_travel_time_seconds"
+    - "mean_travel_time"
+  lower_tt:
+    - "Range - Lower Bound Travel Time (Seconds)"
+    - "lower_bound_travel_time_seconds"
+    - "lower_travel_time"
+  upper_tt:
+    - "Range - Upper Bound Travel Time (Seconds)"
+    - "upper_bound_travel_time_seconds"
+    - "upper_travel_time"
+  date_range:
+    - "Date Range"
+    - "date_range"
+
+profiling:
+  # Prevent a city with many files from dominating the small preview artifact.
+  preview_rows_per_location: 200

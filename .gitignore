@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+.env
+artifacts/
+*.log
+.DS_Store
+.idea/
+.vscode/
+
+# The Week 1 teaching snapshot intentionally includes the uploaded Uber Movement
+# dataset under data/raw/uber_movement/ so the profiling step is reproducible.

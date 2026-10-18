@@ -1,0 +1,6 @@
+pandas==2.2.3
+pyarrow==18.1.0
+PyYAML==6.0.2
+pydantic==2.10.4
+pydantic-settings==2.7.0
+pytest==8.3.4
