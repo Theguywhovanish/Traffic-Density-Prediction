@@ -1,13 +1,23 @@
 .venv/
+.tools/
 __pycache__/
 .pytest_cache/
+.ipynb_checkpoints/
 *.py[cod]
 .env
-artifacts/
-*.log
 .DS_Store
 .idea/
 .vscode/
 
-# The Week 1 teaching snapshot intentionally includes the uploaded Uber Movement
-# dataset under data/raw/uber_movement/ so the profiling step is reproducible.
+# Week 1 intentionally tracks the supplied teaching dataset.
+# Generated artifacts are reproducible and normally not committed.
+artifacts/*
+!artifacts/.gitkeep
+
+# Week 2 generated lakehouse / validation data
+data/lakehouse/*
+!data/lakehouse/.gitkeep
+artifacts/week2_spark_validation_lakehouse/
+__pycache__/
+.pytest_cache/
+artifacts/week2_reference/*.csv

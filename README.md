@@ -1,205 +1,156 @@
-# Multi-file Data Contract and Historical Dataset Profiling
+# Traffic Density Prediction
 
-**Goal:** understand and validate the Kaggle Uber Movement download before adding Spark, Kafka, or the lakehouse runtime.
+An urban-mobility data project that profiles historical Uber Movement travel times and builds a location-aware Delta Lake baseline for downstream traffic simulation and prediction.
 
-The Kaggle dataset is organized as multiple travel-time CSVs for different locations. Week 1 therefore treats the **dataset directory** as the input, recursively discovers CSVs, identifies the location for each file, normalizes schema aliases, validates travel-time bounds, and produces global + per-file/per-location profiles.
+## What this project does
 
-## What current codebase does
+The current implementation prepares historical origin-destination (OD) travel-time data. It:
 
-1. Recursively discovers `*.csv` files under `data/raw/uber_movement/`.
-2. Attempts to normalize only files matching the Uber Movement travel-time schema.
-3. Records unrelated/auxiliary CSVs as `skipped_schema` instead of crashing the run.
-4. Adds `location` and `source_file` to every normalized record.
-5. Uses `(location, origin_id, destination_id)` when counting OD pairs, preventing Movement IDs from different cities from colliding.
-6. Validates positive travel times and the constraint `lower_tt <= mean_tt <= upper_tt`.
-7. Writes a compact normalized Parquet preview plus profiling reports.
+1. Profiles and validates the supplied city CSV files.
+2. Normalizes and enriches route records.
+3. Builds Bronze, Silver, and Gold datasets with either a pandas reference runner or Spark and Delta Lake.
+4. Validates that the Gold baseline has one unique record per route.
 
-The dataset is treated as **aggregated origin-destination travel-time statistics**, not as billions of individual trip rows.
+The project does **not** yet train or serve a traffic-density prediction model. The Gold OD baseline is intended as input to future simulation and prediction work.
 
-## Expected input layouts
+## Data and key
 
-Both nested and flat Kaggle layouts are supported.
-
-### Nested by location
+The included Uber Movement dataset contains seven city exports and 5,547 valid route records. The canonical route key is:
 
 ```text
-data/raw/uber_movement/
-├── Boston/
-│   ├── 2018/
-│   │   └── Q1/
-│   │       └── Travel_Times.csv
-│   └── ...
-├── London/
-│   └── Travel_Times.csv
-└── ...
+(location, origin_id, destination_id)
 ```
 
-### Flat filenames
+Movement IDs are city-local, so `origin_id` and `destination_id` must always be interpreted together with `location`.
+
+Travel-time bounds are in seconds. The pipeline derives, among other fields:
 
 ```text
-data/raw/uber_movement/
-├── Boston_Travel_Times_2018_Q1.csv
-├── London_Travel_Times_2018_Q1.csv
-└── ...
+route_log_dispersion = 0.5 * ln(upper_tt / lower_tt)
 ```
 
-Location inference prefers a non-generic parent directory. If the files are flat, it derives the location from the filename. If a single generically named CSV cannot reveal its location, use `--location` explicitly.
+This measures the spread of the supplied travel-time bounds; it is not a direct measurement of traffic density.
 
-## Required travel-time columns
+## Repository layout
 
-Column aliases are configured in `config/settings.yaml`. At minimum each processed travel-time file must provide equivalents of:
-
-- `Origin Movement ID`
-- `Destination Movement ID`
-- `Mean Travel Time (Seconds)`
-- `Range - Lower Bound Travel Time (Seconds)`
-- `Range - Upper Bound Travel Time (Seconds)`
-
-`Date Range` and a location/city column are optional. When no city column exists, location is inferred from the path.
+```text
+config/settings.yaml             Column aliases and profiling settings
+data/raw/uber_movement/          Supplied city CSVs and dataset documentation
+data/lakehouse/                  Default Spark/Delta output (generated)
+notebooks/                       Data exploration notebook
+scripts/                         Profiling, batch, inspection, and validation commands
+src/urban_mobility/              Reusable Python package
+tests/                            Unit and real-dataset tests
+artifacts/                       Reports and generated outputs
+```
 
 ## Setup
 
-```bash
-python -m venv .venv
-```
+Python 3.11 or 3.12 is recommended for the Spark workflow. Use Java 17 for Spark 3.5 and Delta Lake 3.x.
 
-Windows PowerShell:
+Create and activate a virtual environment, then install the core dependencies:
 
 ```powershell
-.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-Copy-Item .env.example .env
-$env:PYTHONPATH="src"
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 ```
 
-Linux/macOS:
+On macOS or Linux, use `python3.12 -m venv .venv` and `source .venv/bin/activate`.
 
-```bash
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-export PYTHONPATH=src
+To run the production Spark/Delta path, also install:
+
+```powershell
+python -m pip install -r requirements-spark.txt
 ```
 
-## Included dataset
+On Windows, install the checksum-verified Hadoop helper binaries once:
 
-This Week 1 snapshot already contains the uploaded Uber Movement dataset under:
+```powershell
+.\scripts\setup_hadoop.ps1
+```
+
+The setup script stores them in the ignored `.tools/hadoop/` directory. It does not change machine-wide environment variables. A valid existing `HADOOP_HOME` takes precedence.
+
+## Run
+
+Run commands from the repository root with the virtual environment active.
+
+| Goal | Command |
+|---|---|
+| Profile the supplied dataset | `python scripts/profile_historical_data.py` |
+| Run the exploration notebook | `python scripts/run_notebook.py` |
+| Run the pandas reference pipeline | `python scripts/run_batch_reference.py` |
+| Run the Spark/Delta pipeline | `python scripts/run_batch_lakehouse.py` |
+| Inspect the generated Delta tables | `python scripts/inspect_lakehouse.py` |
+| Run all validation checks | `python scripts/validate_week2.py` |
+| Run tests only | `python -m pytest` |
+
+The Spark command requires the Spark dependencies and, on Windows, the Hadoop helper setup. Validation runs the production Spark job automatically when Spark and Delta are installed.
+
+Optional path overrides:
+
+```powershell
+python scripts/run_batch_lakehouse.py --input data/raw/uber_movement --lakehouse-root data/lakehouse
+python scripts/run_batch_reference.py --input data/raw/uber_movement --output artifacts/week2_reference
+python scripts/inspect_lakehouse.py --lakehouse-root data/lakehouse
+```
+
+## Pipeline outputs
+
+### Profiling
+
+`python scripts/profile_historical_data.py` writes the data profile and route summaries to `artifacts/`:
+
+- `data_profile.json`
+- `file_profile.csv`
+- `location_summary.csv`
+- `route_statistics.csv`
+- `normalized_preview.csv`
+
+### Reference pipeline
+
+`python scripts/run_batch_reference.py` writes `bronze.csv`, `silver.csv`, `gold.csv`, and `metrics.json` under `artifacts/week2_reference/`. It mirrors the Spark transformations for local checks and does not replace the Delta output.
+
+### Spark and Delta Lake
+
+`python scripts/run_batch_lakehouse.py` writes three Delta tables under `data/lakehouse/`:
 
 ```text
-data/raw/uber_movement/
+bronze/uber_movement_raw
+silver/uber_routes
+gold/od_baseline
 ```
 
-The included archive uses flat filenames such as:
+Each table is partitioned by `location`. Runs overwrite the current table snapshot at these paths. Delta may retain older files for time travel; removing historical files requires a separate `VACUUM` operation.
+
+## Data layers
+
+- **Bronze — `uber_movement_raw`:** source route fields, source filename, location, and ingestion timestamp.
+- **Silver — `uber_routes`:** validated and deduplicated routes with parsed date ranges, ratios, geometry availability, and derived travel-time features.
+- **Gold — `od_baseline`:** one baseline per `(location, origin_id, destination_id)`, with a deterministic SHA-256 `baseline_id`.
+
+The Gold table is intended for downstream modeling and simulation. It is a historical baseline, not a live traffic feed.
+
+## Configuration
+
+- `config/settings.yaml` defines source-column aliases and profiling options.
+- Optional `.env` values can override `UBER_MOVEMENT_INPUT`, `ARTIFACT_DIR`, `LAKEHOUSE_ROOT`, and `SPARK_APP_NAME`. See `.env.example`.
+- Default paths are relative to the repository root.
+
+## Validation
+
+```powershell
+python scripts/validate_week2.py
+```
+
+Validation compiles Python sources, runs the reference pipeline against the supplied dataset, checks the Gold contract, and runs the test suite. If Spark and Delta dependencies are installed, it also runs the production pipeline. The report is written to `artifacts/week2_validation.json`.
+
+Expected dataset-level results:
 
 ```text
-Travel_Times - Bogota.csv
-Travel_Times - Boston.csv
-Travel_Times - Johannesburg and Pretoria.csv
-Travel_Times - Manila.csv
-Travel_Times - Paris.csv
-Travel_Times - Sydney.csv
-Travel_Times - Washington DC.csv
+routes:                 5,547
+locations:                  7
+unique route keys:      5,547
+ordered travel bounds:  true
 ```
-
-The profiler supports this naming pattern directly; no renaming or manual merge is required. It also continues to support nested folders and `<location>_Travel_Times_...csv` naming.
-
-Verified against the included files:
-
-- 7 travel-time CSV files
-- 5,547 aggregate OD travel-time rows
-- 7 locations: Bogota, Boston, Johannesburg and Pretoria, Manila, Paris, Sydney, Washington DC
-- 0 invalid travel-time rows
-- 0 rows with unknown location
-
-The accompanying `datapackage.json` declares the package license as **CC BY-NC**; the supplied metadata and methodology PDF are retained alongside the CSVs.
-
-Run:
-
-```bash
-python scripts/profile_historical_data.py
-```
-
-You can also point at another extracted directory:
-
-```bash
-python scripts/profile_historical_data.py --input D:/datasets/uber-movement
-```
-
-For one standalone file with no location in its path/name:
-
-```bash
-python scripts/profile_historical_data.py \
-  --input data/raw/uber_movement/Travel_Times.csv \
-  --location Boston
-```
-
-## Outputs
-
-```text
-artifacts/
-├── data_profile.json
-├── file_profile.csv
-└── normalized_preview.parquet
-```
-
-### `data_profile.json`
-
-Global summary plus per-location statistics, for example:
-
-```json
-{
-  "files_discovered": 42,
-  "files_processed": 40,
-  "files_skipped_schema": 2,
-  "rows_raw": 1345721,
-  "rows_invalid": 6513,
-  "rows_after_global_dedup": 1339208,
-  "unique_locations": 12,
-  "locations": {
-    "Boston": {
-      "rows": 47987,
-      "files": 4,
-      "unique_od_pairs": 10432
-    }
-  }
-}
-```
-
-### `file_profile.csv`
-
-One row per discovered CSV with status and quality statistics. This is useful for identifying a malformed location file or auxiliary CSV before Week 2.
-
-### `normalized_preview.parquet`
-
-A small sample of canonical records from every location:
-
-```text
-location
-source_file
-origin_id
-destination_id
-mean_tt
-lower_tt
-upper_tt
-date_range
-```
-
-It is a preview/contract-validation artifact, **not** the complete lakehouse dataset. Full distributed ingestion begins in Week 2.
-
-## Tests
-
-```bash
-pytest -q
-```
-
-Tests cover recursive discovery, nested/flat location inference, auxiliary-file skipping, invalid travel-time rows, and protection against cross-city Movement-ID collisions.
-
-## Suggested Git commit
-
-```text
-chore: bootstrap multi-location Uber Movement data profiling
-```
-
-## Next week
-
-Move this canonical contract into Spark, ingest all location-specific CSVs into Bronze/Silver Delta tables, and build location-aware OD baselines.

@@ -15,9 +15,12 @@ class Settings(BaseSettings):
     # Week 1 now accepts either a single CSV or a directory containing many
     # location-specific CSVs. Directory input is the default for the Kaggle dump.
     uber_movement_input: str = "data/raw/uber_movement"
+    artifact_dir: str = "artifacts"
     profile_report: str = "artifacts/data_profile.json"
     file_profile_report: str = "artifacts/file_profile.csv"
     normalized_preview: str = "artifacts/normalized_preview.parquet"
+    lakehouse_root: str = "data/lakehouse"
+    spark_app_name: str = "urban-mobility-week2"
 
     def resolve_repo_path(self, value: str) -> Path:
         path = Path(value)

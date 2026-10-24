@@ -8,10 +8,24 @@ historical_columns:
     - "Origin Movement ID"
     - "origin_movement_id"
     - "origin_id"
+  origin_name:
+    - "Origin Display Name"
+    - "origin_display_name"
+    - "origin_name"
+  origin_geometry:
+    - "Origin Geometry"
+    - "origin_geometry"
   destination_id:
     - "Destination Movement ID"
     - "destination_movement_id"
     - "destination_id"
+  destination_name:
+    - "Destination Display Name"
+    - "destination_display_name"
+    - "destination_name"
+  destination_geometry:
+    - "Destination Geometry"
+    - "destination_geometry"
   mean_tt:
     - "Mean Travel Time (Seconds)"
     - "mean_travel_time_seconds"

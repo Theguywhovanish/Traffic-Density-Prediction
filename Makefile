@@ -1,6 +1,19 @@
-.PHONY: profile test
+.PHONY: profile test validate reference batch inspect
+
 profile:
-	PYTHONPATH=src python scripts/profile_historical_data.py
+	python scripts/profile_historical_data.py
 
 test:
-	PYTHONPATH=src pytest -q
+	pytest -q
+
+reference:
+	python scripts/run_batch_reference.py
+
+batch:
+	python scripts/run_batch_lakehouse.py
+
+inspect:
+	python scripts/inspect_lakehouse.py
+
+validate:
+	python scripts/validate_week2.py
