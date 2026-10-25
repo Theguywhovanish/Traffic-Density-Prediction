@@ -10,6 +10,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
 from traffic_density.deploy.storage import db_connection, rows_as_dict
 
@@ -17,6 +18,19 @@ app = FastAPI(title="PEMS04 Lambda Traffic Density", version="1.0.0")
 SHARED = Path(os.getenv("SHARED_DIR", "/shared"))
 DASHBOARD = Path(os.getenv("DASHBOARD_PATH", "/app/stack/dashboard.html"))
 DISTANCE = Path(os.getenv("DISTANCE_PATH", "/app/data/raw/distance.csv"))
+REPLAY_STATUS = SHARED / "replay_status.json"
+REPLAY_CONTROL = SHARED / "replay_control.json"
+
+
+class ReplayControlUpdate(BaseModel):
+    delay_seconds: float = Field(ge=0.5, le=10.0)
+
+
+def read_json(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
 
 
 def latest_speed_snapshot() -> dict | None:
@@ -84,7 +98,31 @@ def status():
         "forecasts": total, "verified_forecasts": verified,
         "batch_ready": (SHARED / "batch_output/seasonal/_SUCCESS").exists(),
         "spark_speed_latest": latest_speed_snapshot(),
+        "replay_status": read_json(REPLAY_STATUS),
     }
+
+
+@app.get("/api/replay/control")
+def get_replay_control():
+    state = read_json(REPLAY_STATUS)
+    control = read_json(REPLAY_CONTROL)
+    delay = control.get("delay_seconds", state.get("delay_seconds", os.getenv("REPLAY_DELAY", "2")))
+    return {"delay_seconds": float(delay), "loop_enabled": state.get("loop_enabled", True),
+            "min_delay_seconds": 0.5,
+            "max_delay_seconds": 10.0}
+
+
+@app.put("/api/replay/control")
+def set_replay_control(update: ReplayControlUpdate):
+    SHARED.mkdir(parents=True, exist_ok=True)
+    temporary = REPLAY_CONTROL.with_suffix(f".{os.getpid()}.tmp")
+    try:
+        temporary.write_text(json.dumps({"delay_seconds": update.delay_seconds}), encoding="utf-8")
+        os.replace(temporary, REPLAY_CONTROL)
+    except OSError as exc:
+        temporary.unlink(missing_ok=True)
+        raise HTTPException(status_code=503, detail="Replay control storage is unavailable") from exc
+    return {"delay_seconds": update.delay_seconds, "applied": True}
 
 
 @app.get("/api/network")

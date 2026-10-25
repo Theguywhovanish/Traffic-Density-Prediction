@@ -13,6 +13,7 @@ x-app: &app
     DATA_PATH: /app/data/raw/pems04.npz
     MODEL_PATH: /app/artifacts/model.joblib
     SHARED_DIR: /shared
+    REPLAY_DELAY: ${REPLAY_DELAY:-2}
     PYTHONUNBUFFERED: "1"
   restart: on-failure
 
@@ -139,7 +140,7 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
-      - shared:/shared:ro
+      - shared:/shared
       - ./data/raw:/app/data/raw:ro
       - ./stack/dashboard.html:/app/stack/dashboard.html:ro
     depends_on:
@@ -152,17 +153,20 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       KAFKA_TOPIC: pems04.sensor_ticks
+      DATABASE_URL: postgresql://traffic:traffic_demo@postgres:5432/traffic
       DATA_PATH: /app/data/raw/pems04.npz
       DISTANCE_PATH: /app/data/raw/distance.csv
+      SHARED_DIR: /shared
       REPLAY_TICKS: ${REPLAY_TICKS:-60}
-      REPLAY_DELAY: ${REPLAY_DELAY:-0.5}
-      REPLAY_LOOP: ${REPLAY_LOOP:-false}
-      REPLAY_START_STEP: ${REPLAY_START_STEP:-14455}
+      REPLAY_DELAY: ${REPLAY_DELAY:-2}
+      REPLAY_LOOP: ${REPLAY_LOOP:-true}
+      REPLAY_START_STEP: ${REPLAY_START_STEP:-auto}
       SCENARIO_TICK: ${SCENARIO_TICK:--1}
       SCENARIO_DURATION: ${SCENARIO_DURATION:-6}
       SCENARIO_SENSORS: ${SCENARIO_SENSORS:-0,100,200}
     volumes:
       - ./data/raw:/app/data/raw:ro
+      - shared:/shared
     depends_on:
       kafka:
         condition: service_started
@@ -172,7 +176,9 @@ services:
         condition: service_started
       spark-speed:
         condition: service_started
-    restart: "no"
+      postgres:
+        condition: service_healthy
+    restart: on-failure
 
 volumes:
   kafka_data:

@@ -16,6 +16,11 @@ main{max-width:1120px;margin:26px auto;padding:0 22px}
 .panel-title{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .panel-title h3{margin:0}.panel-title p{font-size:13px;margin:5px 0 0}
 .map-controls{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px}
+.map-control-group{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.replay-control input[type=range]{width:150px;padding:0;accent-color:#54d6b6;cursor:pointer}
+#replayDelayLabel{min-width:76px;color:var(--text);font-variant-numeric:tabular-nums}
+.toast{position:fixed;z-index:5;right:20px;top:18px;max-width:min(440px,calc(100vw - 40px));padding:14px 18px;border:1px solid #59d9bc;border-radius:10px;background:#163d3b;color:#eafffa;box-shadow:0 10px 32px #0007}
+.toast[hidden]{display:none}
 select,input{background:var(--bg);color:var(--text);border:1px solid #50627d;padding:9px 10px;border-radius:8px}
 #networkMap{display:block;width:100%;height:auto;max-height:590px;margin-top:10px;background:radial-gradient(ellipse at center,#1a2b43 0%,#101a2c 76%);border:1px solid #263951;border-radius:10px}
 .edge{stroke:#61748d;stroke-opacity:.32;stroke-width:1.1}.sensor-node{stroke:#102033;stroke-width:1.5;cursor:pointer;transition:r .12s,stroke-width .12s}
@@ -40,7 +45,11 @@ th{color:#adc3df;font-weight:600}.muted{color:var(--muted)}.ok{color:var(--mint)
 </div>
 <section class="panel">
 <div class="panel-title"><div><h3>Sensor network · live replay</h3><p>Click a sensor to inspect its latest readings and forecasts.</p></div>
-<label class="map-controls">Color by <select id="mapMetric"><option value="speed">Speed</option><option value="density">Estimated density</option></select></label></div>
+<div class="map-control-group">
+<label class="map-controls">Color by <select id="mapMetric"><option value="speed">Speed</option><option value="density">Estimated density</option></select></label>
+<label class="map-controls replay-control" for="replayDelay">Replay pace <input id="replayDelay" type="range" min="0.5" max="10" step="0.5" value="2"/><output id="replayDelayLabel">2.00s / tick</output></label>
+</div></div>
+<p id="replayControlStatus" class="sub" aria-live="polite">One data tick represents five simulated minutes.</p>
 <svg id="networkMap" viewBox="0 0 1000 560" role="img" aria-label="Schematic of PEMS04 sensor connections colored by latest readings">
 <g id="mapEdges"></g><g id="mapNodes"></g></svg>
 <div class="map-footer"><span id="mapSummary" class="map-status">Waiting for sensor readings…</span>
@@ -55,11 +64,12 @@ th{color:#adc3df;font-weight:600}.muted{color:var(--muted)}.ok{color:var(--mint)
 <div class="table-wrap forecast-wrap"><table><thead><tr><th>Origin step</th><th>Horizon</th><th>Prediction (veh/mi)</th><th>Absolute error</th></tr></thead><tbody id="rows"></tbody></table></div></section>
 <p class="sub">Historical source data are from 2018. Optional disturbances are synthetic and labeled.</p>
 </main>
+<div id="loopToast" class="toast" role="status" aria-live="polite" hidden></div>
 <script>
 const $=id=>document.getElementById(id);
 const n=v=>Number(v).toLocaleString(undefined,{maximumFractionDigits:2});
 async function get(path){const r=await fetch(path);if(!r.ok)throw new Error(r.status);return r.json()}
-let positions=null, currentNetwork=null, refreshing=false;
+let positions=null, currentNetwork=null, refreshing=false, loopCountSeen=null, toastTimer=null;
 
 function makeLayout(nodes,edges){
   const W=1000,H=560,count=nodes.length,k=Math.sqrt((W*H)/Math.max(1,count));
@@ -112,6 +122,29 @@ function updateFreshness(status){
   $('mapSummary').classList.toggle('stale',age>10);
   $('mapSummary').textContent+=age<=10?' · replay updating':` · paused, last write ${age}s ago`;
 }
+function showLoopNotice(count,replay){
+  const when=replay.loop_started_at?` at ${new Date(replay.loop_started_at).toLocaleTimeString()}`:'';
+  $('loopToast').textContent=`Replay loop ${count} started${when} — playback wrapped to the beginning of the PEMS04 dataset.`;
+  $('loopToast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('loopToast').hidden=true,12000);
+}
+function observeReplay(replay){
+  const count=Number(replay?.loop_count||0);
+  if(loopCountSeen===null){
+    let seen=0;try{seen=Number(sessionStorage.getItem('pems04-loop-count')||0)}catch{}
+    if(count>seen)showLoopNotice(count,replay);
+  }else if(count>loopCountSeen)showLoopNotice(count,replay);
+  loopCountSeen=count;try{sessionStorage.setItem('pems04-loop-count',String(count))}catch{}
+}
+function showReplayDelay(value){$('replayDelay').value=value;$('replayDelayLabel').textContent=`${Number(value).toFixed(2)}s / tick`}
+async function loadReplayControl(){try{const control=await get('/api/replay/control');showReplayDelay(control.delay_seconds);$('replayControlStatus').textContent=`${control.loop_enabled?'Continuous loop on':'Loop off'} · one tick represents five simulated minutes`}catch{$('replayControlStatus').textContent='Replay control unavailable'}}
+async function saveReplayDelay(){
+  try{
+    const response=await fetch('/api/replay/control',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({delay_seconds:Number($('replayDelay').value)})});
+    if(!response.ok)throw new Error(response.status);
+    const saved=await response.json();showReplayDelay(saved.delay_seconds);
+    $('replayControlStatus').textContent=`Applied · one 5-minute data tick every ${Number(saved.delay_seconds).toFixed(2)} seconds`;
+  }catch(err){$('replayControlStatus').textContent=`Could not save replay pace: ${err.message}`}
+}
 async function refresh(){if(refreshing)return;refreshing=true;try{
   const [s,m,net]=await Promise.all([get('/api/status'),get('/api/metrics'),get('/api/network')]);
   $('obs').textContent=n(s.sensor_observations);$('pred').textContent=n(s.forecasts);
@@ -119,7 +152,7 @@ async function refresh(){if(refreshing)return;refreshing=true;try{
   $('batch').className=s.batch_ready?'ok':'warn';
   $('speed').textContent=s.spark_speed_latest?`Tick ${s.spark_speed_latest.step} · ${n(s.spark_speed_latest.sensor_count)} sensors · mean density ${n(s.spark_speed_latest.mean_density)} veh/mi · mean speed ${n(s.spark_speed_latest.mean_speed)} mph`:'Waiting for Spark…';
   $('quality').innerHTML=m.online_metrics.map(r=>`<tr><td>+${r.horizon_min} min</td><td>${n(r.n)}</td><td>${n(r.mae)}</td></tr>`).join('')||'<tr><td colspan="3">Not enough replayed targets yet</td></tr>';
-  currentNetwork=net;drawNetwork(net);updateFreshness(s);
+  currentNetwork=net;drawNetwork(net);updateFreshness(s);observeReplay(s.replay_status);
   const sid=Math.min(306,Math.max(0,Number($('sensor').value)||0));
   const [rec,f]=await Promise.all([get(`/api/reconciliation/${sid}`),get(`/api/forecasts/${sid}?limit=45`)]);
   $('reconciliation').textContent=rec.status==='ready'?`Observed: ${n(rec.observed_density)} · Historical baseline: ${n(rec.historical_mean_density)} · Difference: ${n(rec.density_delta)} vehicles/mile`:`Status: ${rec.status}`;
@@ -127,5 +160,7 @@ async function refresh(){if(refreshing)return;refreshing=true;try{
   $('forecastWindow').textContent=`${verified} verified · ${f.forecasts.length-verified} pending in the 15 most recent forecast origins`;
   $('rows').innerHTML=f.forecasts.map(r=>`<tr><td>${r.origin_step}</td><td>+${r.horizon_min} min</td><td>${n(r.predicted_density)}</td><td>${r.absolute_error==null?'Pending':n(r.absolute_error)}</td></tr>`).join('')||'<tr><td colspan="4">Waiting for predictor</td></tr>';
 }catch(err){$('speed').textContent='Service warming up: '+err.message}finally{refreshing=false}}
-refresh();setInterval(refresh,3000);$('sensor').addEventListener('change',refresh);$('mapMetric').addEventListener('change',()=>currentNetwork&&drawNetwork(currentNetwork));
+refresh();loadReplayControl();setInterval(refresh,3000);$('sensor').addEventListener('change',refresh);$('mapMetric').addEventListener('change',()=>currentNetwork&&drawNetwork(currentNetwork));
+$('replayDelay').addEventListener('input',()=>{$('replayDelayLabel').textContent=`${Number($('replayDelay').value).toFixed(2)}s / tick`;$('replayControlStatus').textContent='Release to apply the new pace'});
+$('replayDelay').addEventListener('change',saveReplayDelay);
 </script></body></html>

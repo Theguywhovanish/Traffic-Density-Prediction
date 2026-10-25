@@ -100,19 +100,7 @@ docker compose up --build -d
 python scripts/verify_stack.py --wait-seconds 240 --require-events
 ```
 
-Open [http://localhost:8000](http://localhost:8000) for the dashboard. It replays historical PEMS04 data, not current roadway telemetry.
-
-For continuous Docker replay from the latest stored step (PowerShell):
-
-```powershell
-$env:REPLAY_LOOP="true"
-$s=Invoke-RestMethod http://localhost:8000/api/status
-$env:REPLAY_START_STEP=([int]$s.last_step + 1).ToString()
-$env:REPLAY_DELAY="2"
-docker compose up -d --force-recreate producer
-```
-
-Stop replay with `docker compose stop producer`.
+Open [http://localhost:8000](http://localhost:8000) for the dashboard. It replays historical PEMS04 data, not current roadway telemetry. The Docker producer loops by default and resumes from the latest step saved in PostgreSQL after a container restart. Use the dashboard's replay-pace slider to set the interval per five-minute data tick; a dashboard notification appears when playback wraps to the start of the dataset. Stop replay with `docker compose stop producer`.
 
 Run the exploration notebook:
 
