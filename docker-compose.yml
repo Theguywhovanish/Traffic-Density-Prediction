@@ -1,0 +1,180 @@
+name: pems04-lambda
+
+x-app: &app
+  image: pems04-lambda-app:local
+  build:
+    context: .
+    dockerfile: stack/Dockerfile.app
+  environment:
+    KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    KAFKA_TOPIC: pems04.sensor_ticks
+    DATABASE_URL: postgresql://traffic:traffic_demo@postgres:5432/traffic
+    DISTANCE_PATH: /app/data/raw/distance.csv
+    DATA_PATH: /app/data/raw/pems04.npz
+    MODEL_PATH: /app/artifacts/model.joblib
+    SHARED_DIR: /shared
+    PYTHONUNBUFFERED: "1"
+  restart: on-failure
+
+services:
+  kafka-storage-init:
+    image: busybox:1.36
+    user: "0:0"
+    command: ["sh", "-c", "chown -R 1000:1000 /data"]
+    volumes:
+      - kafka_data:/data
+    restart: "no"
+
+  kafka:
+    image: apache/kafka:3.9.1
+    hostname: kafka
+    environment:
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+      KAFKA_HEAP_OPTS: -Xms256m -Xmx512m
+    volumes:
+      - kafka_data:/tmp/kraft-combined-logs
+    depends_on:
+      kafka-storage-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: traffic
+      POSTGRES_PASSWORD: traffic_demo
+      POSTGRES_DB: traffic
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U traffic -d traffic"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./stack/sql/001_schema.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
+    restart: unless-stopped
+
+  prepare-batch:
+    <<: *app
+    command: ["python", "-m", "traffic_density.deploy", "prepare"]
+    volumes:
+      - ./data/raw:/app/data/raw:ro
+      - shared:/shared
+    restart: "no"
+
+  spark-batch:
+    image: apache/spark:3.5.9-scala2.12-java17-python3-r-ubuntu
+    user: "0:0" # local classroom demo: named Docker volume needs write permission
+    entrypoint: ["/opt/spark/bin/spark-submit"]
+    command: ["--master", "local[2]", "--conf", "spark.driver.memory=768m", "/app/stack/spark_batch.py"]
+    environment:
+      SPARK_LOCAL_IP: 127.0.0.1
+      BATCH_INPUT: /shared/batch_input/history.csv
+      BATCH_OUTPUT: /shared/batch_output/seasonal
+    volumes:
+      - ./stack:/app/stack:ro
+      - shared:/shared
+    depends_on:
+      prepare-batch:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  bridge:
+    <<: *app
+    command: ["python", "-m", "traffic_density.deploy", "bridge"]
+    volumes:
+      - shared:/shared
+    depends_on:
+      kafka:
+        condition: service_started
+
+  spark-speed:
+    image: apache/spark:3.5.9-scala2.12-java17-python3-r-ubuntu
+    user: "0:0"
+    entrypoint: ["/opt/spark/bin/spark-submit"]
+    command: ["--master", "local[2]", "--conf", "spark.driver.memory=768m", "/app/stack/spark_speed.py"]
+    environment:
+      SPARK_LOCAL_IP: 127.0.0.1
+      SPARK_LANDING_DIR: /shared/landing
+      SPEED_OUTPUT: /shared/speed_output
+      SPEED_CHECKPOINT: /shared/checkpoints/speed
+    volumes:
+      - ./stack:/app/stack:ro
+      - shared:/shared
+    depends_on:
+      bridge:
+        condition: service_started
+      spark-batch:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  predictor:
+    <<: *app
+    command: ["python", "-m", "traffic_density.deploy", "predictor"]
+    volumes:
+      - ./data/raw:/app/data/raw:ro
+    depends_on:
+      kafka:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *app
+    command: ["uvicorn", "traffic_density.deploy.api:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - shared:/shared:ro
+      - ./data/raw:/app/data/raw:ro
+      - ./stack/dashboard.html:/app/stack/dashboard.html:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  producer:
+    <<: *app
+    command: ["python", "-m", "traffic_density.deploy", "producer"]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: pems04.sensor_ticks
+      DATA_PATH: /app/data/raw/pems04.npz
+      DISTANCE_PATH: /app/data/raw/distance.csv
+      REPLAY_TICKS: ${REPLAY_TICKS:-60}
+      REPLAY_DELAY: ${REPLAY_DELAY:-0.5}
+      REPLAY_LOOP: ${REPLAY_LOOP:-false}
+      REPLAY_START_STEP: ${REPLAY_START_STEP:-14455}
+      SCENARIO_TICK: ${SCENARIO_TICK:--1}
+      SCENARIO_DURATION: ${SCENARIO_DURATION:-6}
+      SCENARIO_SENSORS: ${SCENARIO_SENSORS:-0,100,200}
+    volumes:
+      - ./data/raw:/app/data/raw:ro
+    depends_on:
+      kafka:
+        condition: service_started
+      bridge:
+        condition: service_started
+      predictor:
+        condition: service_started
+      spark-speed:
+        condition: service_started
+    restart: "no"
+
+volumes:
+  kafka_data:
+  pg_data:
+  shared:

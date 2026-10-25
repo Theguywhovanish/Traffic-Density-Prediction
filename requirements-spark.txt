@@ -1,4 +1,0 @@
--r requirements.txt
-# Known compatible Spark 3.5 / Delta 3.x family. Use Python 3.11 or 3.12 and Java 17.
-pyspark>=3.5,<4
-delta-spark>=3.2,<4

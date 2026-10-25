@@ -1,23 +1,9 @@
+__pycache__/
+*.pyc
+*.egg-info/
 .venv/
-.tools/
-__pycache__/
-.pytest_cache/
-.ipynb_checkpoints/
-*.py[cod]
-.env
-.DS_Store
-.idea/
-.vscode/
-
-# Week 1 intentionally tracks the supplied teaching dataset.
-# Generated artifacts are reproducible and normally not committed.
-artifacts/*
-!artifacts/.gitkeep
-
-# Week 2 generated lakehouse / validation data
-data/lakehouse/*
-!data/lakehouse/.gitkeep
-artifacts/week2_spark_validation_lakehouse/
-__pycache__/
-.pytest_cache/
-artifacts/week2_reference/*.csv
+logs/
+artifacts/*.joblib
+artifacts/*.json
+data/raw/*.zip
+RUN_RESULTS.md

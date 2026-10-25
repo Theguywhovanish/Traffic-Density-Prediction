@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>PEMS04 · Lambda Traffic Monitor</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1324;--panel:#152137;--line:#304461;--text:#e7f0fc;--muted:#aabbd2;--mint:#95e3d6}
+*{box-sizing:border-box}body{font:15px system-ui,sans-serif;background:var(--bg);color:var(--text);margin:0}
+header{padding:26px max(24px,calc((100vw - 1120px)/2));border-bottom:1px solid #273349}
+h1{font-size:25px;margin:0 0 7px}p{color:var(--muted);margin:8px 0}
+main{max-width:1120px;margin:26px auto;padding:0 22px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+.card,.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px}
+.card{padding:17px}.card strong{font-size:23px;display:block;margin:8px 0;color:var(--mint)}
+.sub{font-size:12px;color:var(--muted)}section{margin-top:18px}.panel{padding:18px}
+.panel-title{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.panel-title h3{margin:0}.panel-title p{font-size:13px;margin:5px 0 0}
+.map-controls{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px}
+select,input{background:var(--bg);color:var(--text);border:1px solid #50627d;padding:9px 10px;border-radius:8px}
+#networkMap{display:block;width:100%;height:auto;max-height:590px;margin-top:10px;background:radial-gradient(ellipse at center,#1a2b43 0%,#101a2c 76%);border:1px solid #263951;border-radius:10px}
+.edge{stroke:#61748d;stroke-opacity:.32;stroke-width:1.1}.sensor-node{stroke:#102033;stroke-width:1.5;cursor:pointer;transition:r .12s,stroke-width .12s}
+.sensor-node:hover{stroke:#fff;stroke-width:2.4}.sensor-node.selected{stroke:#fff;stroke-width:3}
+.map-footer{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-top:10px;color:var(--muted);font-size:12px}
+.legend{display:flex;align-items:center;gap:7px}.gradient{width:120px;height:8px;border-radius:5px;background:linear-gradient(90deg,#ef6960,#e9bd5d,#47d69f)}
+.map-status{color:var(--mint)}.map-status.stale{color:#fcd28e}
+table{width:100%;border-collapse:collapse;text-align:left}th,td{padding:10px;border-bottom:1px solid #293950}
+th{color:#adc3df;font-weight:600}.muted{color:var(--muted)}.ok{color:var(--mint)}.warn{color:#fcd28e}
+.table-wrap{overflow-x:auto}.note{font-size:12px;line-height:1.5;margin-top:12px}
+.forecast-wrap{max-height:390px;overflow:auto;margin-top:10px}.forecast-wrap th{position:sticky;top:0;background:var(--panel)}
+@media(max-width:600px){header{padding:20px}main{padding:0 12px;margin:16px auto}.panel{padding:13px}.card{padding:14px}}
+</style>
+</head><body>
+<header><h1>PEMS04 · Lambda Traffic Monitor</h1><p>Accelerated replay of historical detector data · Kafka → Spark → forecasts · not current roadway telemetry</p></header>
+<main>
+<div class="cards">
+<div class="card">Sensor observations<strong id="obs">—</strong><span class="sub">Persisted in PostgreSQL</span></div>
+<div class="card">Forecasts issued<strong id="pred">—</strong><span class="sub">15 / 30 / 60 minutes</span></div>
+<div class="card">Verified forecasts<strong id="verified">—</strong><span class="sub">Observed target timestamp reached</span></div>
+<div class="card">Spark batch status<strong id="batch">—</strong><span class="sub">Training-only historical baseline</span></div>
+</div>
+<section class="panel">
+<div class="panel-title"><div><h3>Sensor network · live replay</h3><p>Click a sensor to inspect its latest readings and forecasts.</p></div>
+<label class="map-controls">Color by <select id="mapMetric"><option value="speed">Speed</option><option value="density">Estimated density</option></select></label></div>
+<svg id="networkMap" viewBox="0 0 1000 560" role="img" aria-label="Schematic of PEMS04 sensor connections colored by latest readings">
+<g id="mapEdges"></g><g id="mapNodes"></g></svg>
+<div class="map-footer"><span id="mapSummary" class="map-status">Waiting for sensor readings…</span>
+<span class="legend"><span id="legendLow">Slow</span><span class="gradient"></span><span id="legendHigh">Fast</span></span></div>
+<p class="note">Schematic network layout from <code>distance.csv</code>. The supplied PEMS04 files contain sensor connections and distances, but no latitude/longitude, so marker positions are not geographic road coordinates. Density is estimated from flow and speed.</p>
+</section>
+<section class="panel"><h3>Speed-layer snapshot</h3><p id="speed" class="muted">Waiting for Spark Structured Streaming…</p></section>
+<section class="panel"><h3>Live forecast quality</h3><div class="table-wrap"><table><thead><tr><th>Horizon</th><th>Verified examples</th><th>Online MAE (vehicles/mile)</th></tr></thead><tbody id="quality"></tbody></table></div></section>
+<section class="panel"><div class="panel-title"><div><h3>Sensor inspection</h3><p>Forecasts verify after their target tick arrives: +15 / +30 / +60 min means 3 / 6 / 12 replay ticks.</p></div><label>Sensor ID (0–306): <input id="sensor" type="number" min="0" max="306" value="0"/></label></div>
+<p id="reconciliation" class="muted">Waiting for observations…</p>
+<p id="forecastWindow" class="sub">Loading recent forecast history…</p>
+<div class="table-wrap forecast-wrap"><table><thead><tr><th>Origin step</th><th>Horizon</th><th>Prediction (veh/mi)</th><th>Absolute error</th></tr></thead><tbody id="rows"></tbody></table></div></section>
+<p class="sub">Historical source data are from 2018. Optional disturbances are synthetic and labeled.</p>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const n=v=>Number(v).toLocaleString(undefined,{maximumFractionDigits:2});
+async function get(path){const r=await fetch(path);if(!r.ok)throw new Error(r.status);return r.json()}
+let positions=null, currentNetwork=null, refreshing=false;
+
+function makeLayout(nodes,edges){
+  const W=1000,H=560,count=nodes.length,k=Math.sqrt((W*H)/Math.max(1,count));
+  const points=nodes.map((node,i)=>{const angle=i*2.399963229728653;const radius=18+Math.sqrt((i+1)/count)*235;return {id:node.sensor_id,x:W/2+Math.cos(angle)*radius,y:H/2+Math.sin(angle)*radius,dx:0,dy:0}});
+  const byId=new Map(points.map((p,i)=>[p.id,i]));
+  const links=edges.map(e=>[byId.get(e.from),byId.get(e.to)]).filter(([a,b])=>a!==undefined&&b!==undefined);
+  for(let turn=0;turn<90;turn++){
+    for(const p of points){p.dx=0;p.dy=0}
+    for(let i=0;i<count;i++)for(let j=i+1;j<count;j++){
+      const a=points[i],b=points[j],vx=a.x-b.x,vy=a.y-b.y,d=Math.max(1,Math.hypot(vx,vy)),force=k*k/d;
+      const fx=vx/d*force,fy=vy/d*force;a.dx+=fx;a.dy+=fy;b.dx-=fx;b.dy-=fy;
+    }
+    for(const [ai,bi] of links){const a=points[ai],b=points[bi],vx=b.x-a.x,vy=b.y-a.y,d=Math.max(1,Math.hypot(vx,vy)),force=d*d/k*.72,fx=vx/d*force,fy=vy/d*force;a.dx+=fx;a.dy+=fy;b.dx-=fx;b.dy-=fy}
+    const temp=10*(1-turn/90);
+    for(const p of points){p.dx+=(W/2-p.x)*.012;p.dy+=(H/2-p.y)*.012;const d=Math.max(1,Math.hypot(p.dx,p.dy)),move=Math.min(d,temp);p.x=Math.max(16,Math.min(W-16,p.x+p.dx/d*move));p.y=Math.max(16,Math.min(H-16,p.y+p.dy/d*move))}
+  }
+  return new Map(points.map(p=>[p.id,p]));
+}
+function colorFor(value,metric){
+  if(value==null||!Number.isFinite(Number(value)))return '#68788d';
+  let t=metric==='speed'?Math.max(0,Math.min(1,Number(value)/75)):Math.max(0,Math.min(1,Number(value)/180));
+  if(metric==='density')t=1-t;
+  const low=[239,105,96],mid=[233,189,93],high=[71,214,159];
+  const a=t<.5?low:mid,b=t<.5?mid:high,u=t<.5?t*2:(t-.5)*2;
+  return `rgb(${a.map((c,i)=>Math.round(c+(b[i]-c)*u)).join(',')})`;
+}
+function drawNetwork(data){
+  if(!data.nodes.length){$('mapSummary').textContent='Waiting for the first complete sensor tick…';return}
+  if(!positions||!$('mapNodes').childElementCount){
+    positions=makeLayout(data.nodes,data.edges);
+    $('mapEdges').innerHTML=data.edges.map(e=>{const a=positions.get(e.from),b=positions.get(e.to);return a&&b?`<line class="edge" x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}"/>`:''}).join('');
+    $('mapNodes').innerHTML=data.nodes.map(s=>{const p=positions.get(s.sensor_id);return `<circle class="sensor-node" data-sensor="${s.sensor_id}" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="5"><title>Sensor ${s.sensor_id}</title></circle>`}).join('');
+    $('mapNodes').querySelectorAll('circle').forEach(el=>el.addEventListener('click',()=>{$('sensor').value=el.dataset.sensor;refresh()}));
+  }
+  const metric=$('mapMetric').value,sensorById=new Map(data.nodes.map(s=>[s.sensor_id,s]));
+  $('mapNodes').querySelectorAll('circle').forEach(el=>{
+    const row=sensorById.get(Number(el.dataset.sensor));
+    el.setAttribute('fill',colorFor(row?.[metric],metric));
+    const selected=Number(el.dataset.sensor)===Number($('sensor').value);
+    el.classList.toggle('selected',selected);el.setAttribute('r',selected?'7':'5');
+    if(row)el.querySelector('title').textContent=`Sensor ${row.sensor_id} · ${n(row.speed)} mph · ${n(row.density)} veh/mi`;
+  });
+  $('legendLow').textContent=metric==='speed'?'Slow':'High density';$('legendHigh').textContent=metric==='speed'?'Fast':'Low density';
+  $('mapSummary').textContent=`${data.nodes.length} sensors · tick ${data.step} · ${data.event_time||'awaiting timestamp'} · schematic positions`;
+}
+function updateFreshness(status){
+  const received=Date.parse(status.last_received_at||'');
+  if(!Number.isFinite(received))return;
+  const age=Math.max(0,Math.round((Date.now()-received)/1000));
+  $('mapSummary').classList.toggle('stale',age>10);
+  $('mapSummary').textContent+=age<=10?' · replay updating':` · paused, last write ${age}s ago`;
+}
+async function refresh(){if(refreshing)return;refreshing=true;try{
+  const [s,m,net]=await Promise.all([get('/api/status'),get('/api/metrics'),get('/api/network')]);
+  $('obs').textContent=n(s.sensor_observations);$('pred').textContent=n(s.forecasts);
+  $('verified').textContent=n(s.verified_forecasts);$('batch').textContent=s.batch_ready?'READY':'WAITING';
+  $('batch').className=s.batch_ready?'ok':'warn';
+  $('speed').textContent=s.spark_speed_latest?`Tick ${s.spark_speed_latest.step} · ${n(s.spark_speed_latest.sensor_count)} sensors · mean density ${n(s.spark_speed_latest.mean_density)} veh/mi · mean speed ${n(s.spark_speed_latest.mean_speed)} mph`:'Waiting for Spark…';
+  $('quality').innerHTML=m.online_metrics.map(r=>`<tr><td>+${r.horizon_min} min</td><td>${n(r.n)}</td><td>${n(r.mae)}</td></tr>`).join('')||'<tr><td colspan="3">Not enough replayed targets yet</td></tr>';
+  currentNetwork=net;drawNetwork(net);updateFreshness(s);
+  const sid=Math.min(306,Math.max(0,Number($('sensor').value)||0));
+  const [rec,f]=await Promise.all([get(`/api/reconciliation/${sid}`),get(`/api/forecasts/${sid}?limit=45`)]);
+  $('reconciliation').textContent=rec.status==='ready'?`Observed: ${n(rec.observed_density)} · Historical baseline: ${n(rec.historical_mean_density)} · Difference: ${n(rec.density_delta)} vehicles/mile`:`Status: ${rec.status}`;
+  const verified=f.forecasts.filter(r=>r.absolute_error!=null).length;
+  $('forecastWindow').textContent=`${verified} verified · ${f.forecasts.length-verified} pending in the 15 most recent forecast origins`;
+  $('rows').innerHTML=f.forecasts.map(r=>`<tr><td>${r.origin_step}</td><td>+${r.horizon_min} min</td><td>${n(r.predicted_density)}</td><td>${r.absolute_error==null?'Pending':n(r.absolute_error)}</td></tr>`).join('')||'<tr><td colspan="4">Waiting for predictor</td></tr>';
+}catch(err){$('speed').textContent='Service warming up: '+err.message}finally{refreshing=false}}
+refresh();setInterval(refresh,3000);$('sensor').addEventListener('change',refresh);$('mapMetric').addEventListener('change',()=>currentNetwork&&drawNetwork(currentNetwork));
+</script></body></html>

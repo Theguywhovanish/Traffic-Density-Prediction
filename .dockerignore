@@ -1,0 +1,10 @@
+.venv/
+*.egg-info/
+**/__pycache__/
+data/
+logs/
+tests/
+*.zip
+artifacts/metrics.json
+.git/
+shared/
